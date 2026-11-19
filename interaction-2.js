@@ -1,95 +1,79 @@
-//==========================================================================================
-// AUDIO SETUP
-//------------------------------------------------------------------------------------------
-//
-//------------------------------------------------------------------------------------------
-// Edit just where you're asked to!
-//------------------------------------------------------------------------------------------
-//
-//==========================================================================================
+// Load the course's Faust creaking-door model.
 let dspNode = null;
-let dspNodeParams = null;
-let jsonParams = null;
 
-// Change here to ("tuono") depending on your wasm file name
-const dspName = "bells";
-const instance = new FaustWasm2ScriptProcessor(dspName);
+const doorPosition = "/door/door/position";
+const doorVolume = "/door/volume";
+const door = new FaustWasm2ScriptProcessor("door");
 
-// output to window or npm package module
-if (typeof module === "undefined") {
-    window[dspName] = instance;
-} else {
-    const exp = {};
-    exp[dspName] = instance;
-    module.exports = exp;
-}
-
-// The name should be the same as the WASM file, so change tuono with brass if you use brass.wasm
-bells.createDSP(audioContext, 1024)
+door.createDSP(audioContext, 1024)
     .then(node => {
+        if (!node) {
+            return;
+        }
+
+        node.setParamValue(doorVolume, 0);
+        node.connect(audioContext.destination);
         dspNode = node;
-        dspNode.connect(audioContext.destination);
-        console.log('params: ', dspNode.getParams());
-        const jsonString = dspNode.getJSON();
-        jsonParams = JSON.parse(jsonString)["ui"][0]["items"];
-        dspNodeParams = jsonParams
-        // const exampleMinMaxParam = findByAddress(dspNodeParams, "/thunder/rumble");
-        // // ALWAYS PAY ATTENTION TO MIN AND MAX, ELSE YOU MAY GET REALLY HIGH VOLUMES FROM YOUR SPEAKERS
-        // const [exampleMinValue, exampleMaxValue] = getParamMinMax(exampleMinMaxParam);
-        // console.log('Min value:', exampleMinValue, 'Max value:', exampleMaxValue);
-    });
+    })
+    .catch(error => console.error("Could not initialize the door sound:", error));
 
+let previousAngle = null;
+let previousTime = null;
+let rotationSpeed = 0;
+let creaking = false;
 
-//==========================================================================================
-// INTERACTIONS
-//------------------------------------------------------------------------------------------
-//
-//------------------------------------------------------------------------------------------
-// Edit the next functions to create interactions
-// Decide which parameters you're using and then use playAudio to play the Audio
-//------------------------------------------------------------------------------------------
-//
-//==========================================================================================
+function rotationChange(_rotationX, _rotationY, rotationZ) {
+    if (!dspNode || audioContext.state !== "running" || !Number.isFinite(rotationZ)) {
+        previousAngle = null;
+        previousTime = null;
+        rotationSpeed = 0;
+        creaking = false;
 
-function accelerationChange(accx, accy, accz) {
-    // playAudio()
-}
-
-const degreesPerStep = 45;
-
-let previousZ = null;
-let accumulatedRotation = 0;
-
-function rotationChange(rotx, roty, rotz) {
-    if (!Number.isFinite(rotz)) {
+        if (dspNode) {
+            dspNode.setParamValue(doorVolume, 0);
+        }
         return;
     }
 
-    if (!dspNode || audioContext.state !== "running") {
-        previousZ = null;
-        accumulatedRotation = 0;
+    const now = millis();
+
+    // Start from the current angle after enabling audio or resuming the page.
+    if (previousAngle === null || now - previousTime > 250) {
+        previousAngle = rotationZ;
+        previousTime = now;
+        rotationSpeed = 0;
+        creaking = false;
+        dspNode.setParamValue(doorVolume, 0);
         return;
     }
 
-    if (previousZ === null) {
-        previousZ = rotz;
+    const elapsed = (now - previousTime) / 1000;
+    if (elapsed <= 0) {
         return;
     }
 
-    // Use the shortest angle difference across the wraparound boundary.
-    const delta = ((rotz - previousZ + 540) % 360) - 180;
-    previousZ = rotz;
-    accumulatedRotation += delta;
+    // Handle angle wraparound, such as 179 degrees to -179 degrees.
+    const delta = ((rotationZ - previousAngle + 540) % 360) - 180;
+    previousAngle = rotationZ;
+    previousTime = now;
 
-    if (Math.abs(accumulatedRotation) >= degreesPerStep && playAudio()) {
-        accumulatedRotation = 0;
+    // Smooth the speed and use separate start and stop thresholds.
+    const weight = 1 - Math.exp(-elapsed / 0.12);
+    rotationSpeed += weight * (Math.abs(delta) / elapsed - rotationSpeed);
+    creaking = rotationSpeed >= (creaking ? 6 : 12);
+
+    if (!creaking) {
+        dspNode.setParamValue(doorVolume, 0);
+        return;
     }
+
+    const speedFraction = Math.min(rotationSpeed / 90, 1);
+    dspNode.setParamValue(doorPosition, 0.18 + 0.28 * speedFraction);
+    dspNode.setParamValue(doorVolume, 0.15 + 0.25 * speedFraction);
 }
 
-function mousePressed() {
-    // playAudio()
-    // Use this for debugging from the desktop!
-}
+// Callbacks used by the course's sketch.js.
+function accelerationChange() {}
 
 function deviceMoved() {
     movetimer = millis();
@@ -99,61 +83,8 @@ function deviceMoved() {
 function deviceTurned() {
     threshVals[1] = turnAxis;
 }
+
 function deviceShaken() {
     shaketimer = millis();
     statusLabels[0].style("color", "pink");
-    playAudio();
 }
-
-function getMinMaxParam(address) {
-    const exampleMinMaxParam = findByAddress(dspNodeParams, address);
-    // ALWAYS PAY ATTENTION TO MIN AND MAX, ELSE YOU MAY GET REALLY HIGH VOLUMES FROM YOUR SPEAKERS
-    const [exampleMinValue, exampleMaxValue] = getParamMinMax(exampleMinMaxParam);
-    console.log('Min value:', exampleMinValue, 'Max value:', exampleMaxValue);
-    return [exampleMinValue, exampleMaxValue]
-}
-
-//==========================================================================================
-// AUDIO INTERACTION
-//------------------------------------------------------------------------------------------
-//
-//------------------------------------------------------------------------------------------
-// Edit here to define your audio controls 
-//------------------------------------------------------------------------------------------
-//
-//==========================================================================================
-
-const bellGate = "/englishBell/gate";
-const bellStrikes = [0, 220]; // Strike times in milliseconds.
-const gateDuration = 80;
-
-let bellPlaying = false;
-
-function playAudio() {
-    if (!dspNode || audioContext.state !== "running" || bellPlaying) {
-        return false;
-    }
-
-    bellPlaying = true;
-
-    for (const delay of bellStrikes) {
-        setTimeout(() => {
-            dspNode.setParamValue(bellGate, 1);
-
-            setTimeout(() => {
-                dspNode.setParamValue(bellGate, 0);
-            }, gateDuration);
-        }, delay);
-    }
-
-    const lastStrike = bellStrikes[bellStrikes.length - 1];
-    setTimeout(() => {
-        bellPlaying = false;
-    }, lastStrike + gateDuration + 40);
-
-    return true;
-}
-
-//==========================================================================================
-// END
-//==========================================================================================
