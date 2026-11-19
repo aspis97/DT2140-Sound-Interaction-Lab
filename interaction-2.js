@@ -55,7 +55,35 @@ function accelerationChange(accx, accy, accz) {
     // playAudio()
 }
 
+const degreesPerStep = 45;
+
+let previousZ = null;
+let accumulatedRotation = 0;
+
 function rotationChange(rotx, roty, rotz) {
+    if (!Number.isFinite(rotz)) {
+        return;
+    }
+
+    if (!dspNode || audioContext.state !== "running") {
+        previousZ = null;
+        accumulatedRotation = 0;
+        return;
+    }
+
+    if (previousZ === null) {
+        previousZ = rotz;
+        return;
+    }
+
+    // Use the shortest angle difference across the wraparound boundary.
+    const delta = ((rotz - previousZ + 540) % 360) - 180;
+    previousZ = rotz;
+    accumulatedRotation += delta;
+
+    if (Math.abs(accumulatedRotation) >= degreesPerStep && playAudio()) {
+        accumulatedRotation = 0;
+    }
 }
 
 function mousePressed() {
@@ -95,15 +123,35 @@ function getMinMaxParam(address) {
 //
 //==========================================================================================
 
+const bellGate = "/englishBell/gate";
+const bellStrikes = [0, 220]; // Strike times in milliseconds.
+const gateDuration = 80;
+
+let bellPlaying = false;
+
 function playAudio() {
-    if (!dspNode) {
-        return;
+    if (!dspNode || audioContext.state !== "running" || bellPlaying) {
+        return false;
     }
-    if (audioContext.state === 'suspended') {
-        return;
+
+    bellPlaying = true;
+
+    for (const delay of bellStrikes) {
+        setTimeout(() => {
+            dspNode.setParamValue(bellGate, 1);
+
+            setTimeout(() => {
+                dspNode.setParamValue(bellGate, 0);
+            }, gateDuration);
+        }, delay);
     }
-    dspNode.setParamValue("/englishBell/gate", 1)
-    setTimeout(() => { dspNode.setParamValue("/englishBell/gate", 0) }, 100);
+
+    const lastStrike = bellStrikes[bellStrikes.length - 1];
+    setTimeout(() => {
+        bellPlaying = false;
+    }, lastStrike + gateDuration + 40);
+
+    return true;
 }
 
 //==========================================================================================
