@@ -1,75 +1,78 @@
-// Load the course's Faust creaking-door model.
+// Load the course's Faust sci-fi sound.
 let dspNode = null;
 
-const doorPosition = "/door/door/position";
-const doorVolume = "/door/volume";
-const door = new FaustWasm2ScriptProcessor("door");
+const triggerAddress = "/torpedo/trigger";
+const volumeAddress = "/torpedo/volume";
+const torpedo = new FaustWasm2ScriptProcessor("torpedo");
 
-door.createDSP(audioContext, 1024)
+torpedo.createDSP(audioContext, 1024)
     .then(node => {
         if (!node) {
             return;
         }
 
-        node.setParamValue(doorVolume, 0);
+        node.setParamValue(volumeAddress, 0.2);
         node.connect(audioContext.destination);
         dspNode = node;
     })
-    .catch(error => console.error("Could not initialize the door sound:", error));
+    .catch(error => console.error("Could not load the sci-fi sound:", error));
+
+const degreesPerStep = 45;
+const minimumTriggerInterval = 250;
+const triggerDuration = 100;
 
 let previousAngle = null;
-let previousTime = null;
-let rotationSpeed = 0;
-let creaking = false;
+let accumulatedAngle = 0;
+let lastTriggerTime = -Infinity;
 
 function rotationChange(_rotationX, _rotationY, rotationZ) {
     if (!dspNode || audioContext.state !== "running" || !Number.isFinite(rotationZ)) {
         previousAngle = null;
-        previousTime = null;
-        rotationSpeed = 0;
-        creaking = false;
-
-        if (dspNode) {
-            dspNode.setParamValue(doorVolume, 0);
-        }
+        accumulatedAngle = 0;
         return;
     }
 
-    const now = millis();
-
-    // Start from the current angle after enabling audio or resuming the page.
-    if (previousAngle === null || now - previousTime > 250) {
+    if (previousAngle === null) {
         previousAngle = rotationZ;
-        previousTime = now;
-        rotationSpeed = 0;
-        creaking = false;
-        dspNode.setParamValue(doorVolume, 0);
         return;
     }
 
-    const elapsed = (now - previousTime) / 1000;
-    if (elapsed <= 0) {
-        return;
-    }
-
-    // Handle angle wraparound, such as 179 degrees to -179 degrees.
+    // Use the shortest angle change when the sensor wraps around.
     const delta = ((rotationZ - previousAngle + 540) % 360) - 180;
     previousAngle = rotationZ;
-    previousTime = now;
+    accumulatedAngle += delta;
 
-    // Smooth the speed and use separate start and stop thresholds.
-    const weight = 1 - Math.exp(-elapsed / 0.12);
-    rotationSpeed += weight * (Math.abs(delta) / elapsed - rotationSpeed);
-    creaking = rotationSpeed >= (creaking ? 6 : 12);
+    if (Math.abs(accumulatedAngle) >= degreesPerStep) {
+        if (playTorpedo()) {
+            accumulatedAngle %= degreesPerStep;
+        } else {
+            // Discard this step during cooldown so it does not play later.
+            accumulatedAngle = 0;
+        }
+    }
+}
 
-    if (!creaking) {
-        dspNode.setParamValue(doorVolume, 0);
-        return;
+function playTorpedo() {
+    const now = millis();
+
+    if (!dspNode || audioContext.state !== "running" ||
+        now - lastTriggerTime < minimumTriggerInterval) {
+        return false;
     }
 
-    const speedFraction = Math.min(rotationSpeed / 90, 1);
-    dspNode.setParamValue(doorPosition, 0.18 + 0.28 * speedFraction);
-    dspNode.setParamValue(doorVolume, 0.15 + 0.25 * speedFraction);
+    lastTriggerTime = now;
+    dspNode.setParamValue(triggerAddress, 1);
+
+    setTimeout(() => {
+        dspNode.setParamValue(triggerAddress, 0);
+    }, triggerDuration);
+
+    return true;
+}
+
+// Click the canvas to test the sound on a computer.
+function mousePressed() {
+    playTorpedo();
 }
 
 // Callbacks used by the course's sketch.js.
